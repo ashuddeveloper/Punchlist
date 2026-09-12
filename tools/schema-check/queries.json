@@ -1,0 +1,165 @@
+{
+  "_comment": [
+    "Hot-path queries, asserted against EXPLAIN QUERY PLAN (acceptance test 8).",
+    "Each entry's `sql` must appear verbatim (modulo whitespace) inside the Swift",
+    "file named by `source`. check.mjs verifies that, so a query cannot be tuned",
+    "in Swift and silently drift away from the plan we assert here."
+  ],
+  "queries": [
+    {
+      "name": "inspection list (home screen)",
+      "source": "Sources/PunchlistCore/Repositories/InspectionRepository.swift",
+      "sql": "SELECT * FROM inspection WHERE org_id = ? AND status = ? AND deleted_at IS NULL ORDER BY scheduled_at DESC LIMIT ?",
+      "params": [
+        "org",
+        "draft",
+        100
+      ],
+      "forbidSort": true
+    },
+    {
+      "name": "inspection list, all statuses",
+      "source": "Sources/PunchlistCore/Repositories/InspectionRepository.swift",
+      "sql": "SELECT * FROM inspection WHERE org_id = ? AND deleted_at IS NULL ORDER BY scheduled_at DESC LIMIT ?",
+      "params": [
+        "org",
+        100
+      ]
+    },
+    {
+      "name": "open one inspection",
+      "source": "Sources/PunchlistCore/Repositories/InspectionRepository.swift",
+      "sql": "SELECT * FROM inspection WHERE id = ? AND deleted_at IS NULL",
+      "params": [
+        "i1"
+      ]
+    },
+    {
+      "name": "checklist answers",
+      "source": "Sources/PunchlistCore/Repositories/ChecklistRepository.swift",
+      "sql": "SELECT * FROM observation WHERE inspection_id = ? AND deleted_at IS NULL",
+      "params": [
+        "i1"
+      ]
+    },
+    {
+      "name": "answer lookup before write",
+      "source": "Sources/PunchlistCore/Repositories/ChecklistRepository.swift",
+      "sql": "SELECT id FROM observation WHERE inspection_id = ? AND item_id = ? AND deleted_at IS NULL",
+      "params": [
+        "i1",
+        "item1"
+      ]
+    },
+    {
+      "name": "findings for inspection",
+      "source": "Sources/PunchlistCore/Repositories/ChecklistRepository.swift",
+      "sql": "SELECT * FROM finding WHERE inspection_id = ? AND deleted_at IS NULL ORDER BY sort_order, id",
+      "params": [
+        "i1"
+      ]
+    },
+    {
+      "name": "severity roll-up",
+      "source": "Sources/PunchlistCore/Repositories/ChecklistRepository.swift",
+      "sql": "SELECT severity FROM finding WHERE observation_id = ? AND deleted_at IS NULL",
+      "params": [
+        "o1"
+      ]
+    },
+    {
+      "name": "next finding sort order",
+      "source": "Sources/PunchlistCore/Repositories/ChecklistRepository.swift",
+      "sql": "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM finding WHERE observation_id = ? AND deleted_at IS NULL",
+      "params": [
+        "o1"
+      ]
+    },
+    {
+      "name": "photo grid",
+      "source": "Sources/PunchlistCore/Repositories/MediaRepository.swift",
+      "sql": "SELECT * FROM media WHERE inspection_id = ? AND deleted_at IS NULL ORDER BY captured_at DESC",
+      "params": [
+        "i1"
+      ],
+      "forbidSort": true
+    },
+    {
+      "name": "photo tray (unfiled)",
+      "source": "Sources/PunchlistCore/Repositories/MediaRepository.swift",
+      "sql": "SELECT * FROM media WHERE inspection_id = ? AND deleted_at IS NULL AND observation_id IS NULL AND finding_id IS NULL ORDER BY captured_at DESC",
+      "params": [
+        "i1"
+      ],
+      "forbidSort": true
+    },
+    {
+      "name": "photos for an observation",
+      "source": "Sources/PunchlistCore/Repositories/MediaRepository.swift",
+      "sql": "SELECT * FROM media WHERE observation_id = ? AND deleted_at IS NULL ORDER BY sort_order, id",
+      "params": [
+        "o1"
+      ],
+      "forbidSort": true
+    },
+    {
+      "name": "photo counts per item",
+      "source": "Sources/PunchlistCore/Repositories/MediaRepository.swift",
+      "sql": "SELECT observation_id AS oid, COUNT(*) AS n FROM media WHERE inspection_id = ? AND deleted_at IS NULL AND observation_id IS NOT NULL GROUP BY observation_id",
+      "params": [
+        "i1"
+      ]
+    },
+    {
+      "name": "media upload queue",
+      "source": "Sources/PunchlistCore/Repositories/MediaRepository.swift",
+      "sql": "SELECT * FROM media WHERE sha256 IS NULL AND deleted_at IS NULL AND kind IN ('photo','video') ORDER BY captured_at LIMIT ?",
+      "params": [
+        20
+      ],
+      "allowScan": true,
+      "note": "Idle-time digest worker. Not on any interactive path; a scan of a partial index here is acceptable and cheaper than carrying another index for it."
+    },
+    {
+      "name": "canned comments \u2014 this item, ranked",
+      "source": "Sources/PunchlistCore/Repositories/CannedCommentRepository.swift",
+      "sql": "SELECT * FROM canned_comment WHERE org_id = ? AND item_id = ? AND severity = ? AND deleted_at IS NULL ORDER BY use_count DESC, last_used_at DESC, id LIMIT ?",
+      "params": [
+        "org",
+        "item1",
+        "repair",
+        5
+      ],
+      "forbidSort": true
+    },
+    {
+      "name": "canned comments \u2014 global top-up",
+      "source": "Sources/PunchlistCore/Repositories/CannedCommentRepository.swift",
+      "sql": "SELECT * FROM canned_comment WHERE org_id = ? AND item_id IS NULL AND severity = ? AND deleted_at IS NULL ORDER BY use_count DESC, last_used_at DESC, id LIMIT ?",
+      "params": [
+        "org",
+        "repair",
+        5
+      ],
+      "forbidSort": true
+    },
+    {
+      "name": "template sections for snapshot",
+      "source": "Sources/PunchlistCore/Repositories/TemplateSnapshotBuilder.swift",
+      "sql": "SELECT * FROM template_section WHERE template_id = ? AND deleted_at IS NULL ORDER BY sort_order, id",
+      "params": [
+        "t1"
+      ],
+      "forbidSort": true
+    },
+    {
+      "name": "template items for snapshot",
+      "source": "Sources/PunchlistCore/Repositories/TemplateSnapshotBuilder.swift",
+      "sql": "SELECT * FROM template_item WHERE section_id = ? AND deleted_at IS NULL ORDER BY sort_order, id",
+      "params": [
+        "s1"
+      ],
+      "forbidSort": true
+    }
+  ]
+}
