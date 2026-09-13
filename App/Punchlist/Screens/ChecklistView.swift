@@ -28,6 +28,7 @@ struct ChecklistView: View {
     @State private var hasRestoredScrollPosition = false
     @State private var isShootingPhotos = false
     @State private var isShowingTray = false
+    @State private var isPreviewingReport = false
     @Environment(AppEnvironment.self) private var environment
     /// Section id -> its header's offset from the top of the scroll view.
     @State private var sectionOffsets: [String: CGFloat] = [:]
@@ -72,6 +73,27 @@ struct ChecklistView: View {
         }
         .sheet(isPresented: $isShowingTray) {
             TraySheet(model: model, environment: environment)
+        }
+        .sheet(isPresented: $isPreviewingReport) {
+            ReportPreviewView(
+                database: environment.database,
+                store: environment.store,
+                inspectionID: model.inspectionID)
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                // Available mid-inspection, not only at the end. Seeing the
+                // report as it stands is what removes the anxiety about what
+                // the client will receive — and an inspector who can check
+                // writes better findings.
+                Button { isPreviewingReport = true } label: {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(width: Metrics.tapTarget, height: Metrics.tapTarget)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Preview the report as it stands")
+            }
         }
         .task { model.start() }
         .onDisappear { model.stop() }
