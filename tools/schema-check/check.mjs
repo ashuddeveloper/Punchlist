@@ -15,7 +15,7 @@
  *   node tools/schema-check/check.mjs
  */
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -78,6 +78,54 @@ for (const q of manifest.queries) {
 }
 
 console.log(`\n${checked - failures}/${checked} hot-path queries indexed.`);
+
+// ---------------------------------------------------------------------------
+// Offline purity (acceptance test 1: "No network call attempted").
+//
+// The strongest version of "works in airplane mode" is not a test that passes
+// with the radio off — it is a module that contains no networking code at all.
+// PunchlistCore decides everything the app stores and everything the report
+// renders, so if it cannot reach the network, neither of those paths can.
+// ---------------------------------------------------------------------------
+const BANNED = [
+  'URLSession', 'URLRequest', 'NWConnection', 'CFNetwork', 'Network.framework',
+  'NSURLConnection', 'dataTask', 'downloadTask', 'uploadTask',
+];
+const coreFiles = [];
+(function walk(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) walk(full);
+    else if (entry.name.endsWith('.swift')) coreFiles.push(full);
+  }
+})(join(repo, 'Sources/PunchlistCore'));
+
+let networkHits = 0;
+for (const file of coreFiles) {
+  const text = readFileSync(file, 'utf8');
+  for (const banned of BANNED) {
+    // Ignore prose: only flag it outside comments.
+    const codeOnly = text
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('//') && !l.trimStart().startsWith('///'))
+      .join('\n');
+    if (codeOnly.includes(banned)) {
+      networkHits++;
+      console.error(`  FAIL  ${file.slice(repo.length + 1)} references ${banned}`);
+    }
+  }
+}
+console.log(
+  networkHits === 0
+    ? `\nPunchlistCore is network-free across ${coreFiles.length} files.`
+    : '');
+if (networkHits) {
+  failures += networkHits;
+  console.error(
+    '\nPunchlistCore must contain no networking. Sync lives in its own module ' +
+    'so that no core path can ever wait on a radio.');
+}
+
 if (failures) {
   console.error(`\n${failures} quer${failures === 1 ? 'y' : 'ies'} would scan. ` +
     'Add an index or change the query — do not relax this check.');
