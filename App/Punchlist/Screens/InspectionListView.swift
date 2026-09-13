@@ -68,6 +68,8 @@ struct InspectionListView: View {
     let database: AppDatabase
     @State private var model: InspectionListModel
     @State private var isCreating = false
+    @State private var createdInspectionID: String?
+    @Environment(AppEnvironment.self) private var environment
 
     init(database: AppDatabase, orgID: String) {
         self.database = database
@@ -97,9 +99,19 @@ struct InspectionListView: View {
                     .accessibilityLabel("Start a new inspection")
                 }
             }
+            // Inside the stack: a navigationDestination attached outside it has
+            // no stack to push onto and silently does nothing.
+            .navigationDestination(item: $createdInspectionID) { id in
+                ChecklistView(database: database, inspectionID: id)
+            }
         }
         .task { model.start() }
         .onDisappear { model.stop() }
+        .sheet(isPresented: $isCreating) {
+            NewInspectionView(environment: environment) { newID in
+                createdInspectionID = newID
+            }
+        }
     }
 
     private var list: some View {
