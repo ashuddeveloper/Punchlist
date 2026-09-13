@@ -185,3 +185,86 @@ final class MutationTests: XCTestCase {
         XCTAssertGreaterThan(reopened.clock.peek(), before)
     }
 }
+
+final class MediaTests: XCTestCase {
+
+    /// The capture path mints the media id at the shutter tap and names the
+    /// files after it, so the row must be insertable under that same id. If
+    /// `record` minted its own, every photo on disk would be an orphan.
+    func testRecordHonoursACallerSuppliedID() throws {
+        let db = try AppDatabase.inMemory()
+        let seed = try FirstRun.bootstrapIfNeeded(db)
+        let media = MediaRepository(database: db)
+
+        let tapMintedID = UUIDv7.generate()
+        let returned = try media.record(
+            orgID: seed.orgID, inspectionID: seed.demoInspectionID, kind: .photo,
+            localPath: "\(seed.demoInspectionID)/display/\(tapMintedID).jpg",
+            thumbPath: "\(seed.demoInspectionID)/thumb/\(tapMintedID).jpg",
+            bytes: 420_000, width: 2048, height: 1536,
+            capturedAt: Clock.nowMillis(), mediaID: tapMintedID)
+
+        XCTAssertEqual(returned, tapMintedID)
+        let stored = try db.read { d in
+            try MediaItem.fetchOne(d, sql: "SELECT * FROM media WHERE id = ?",
+                                   arguments: [tapMintedID])
+        }
+        XCTAssertEqual(stored?.localPath.contains(tapMintedID), true)
+    }
+
+    /// Photos arrive unfiled — inspectors shoot first and organise later — and
+    /// filing must be reversible, because misfiling one is common.
+    func testTrayFilingRoundTrips() throws {
+        let db = try AppDatabase.inMemory()
+        let seed = try FirstRun.bootstrapIfNeeded(db)
+        let media = MediaRepository(database: db)
+        let checklist = ChecklistRepository(database: db)
+
+        let inspection = try XCTUnwrap(
+            try db.read(InspectionRepository.find(id: seed.demoInspectionID)))
+        let snapshot = try inspection.snapshot()
+        let section = try XCTUnwrap(snapshot.sections.first)
+        let item = try XCTUnwrap(section.items.first)
+        let observationID = try checklist.setAnswer(
+            inspectionID: seed.demoInspectionID, sectionID: section.id, itemID: item.id,
+            value: .rating(1))
+
+        var ids: [String] = []
+        for n in 0..<5 {
+            ids.append(try media.record(
+                orgID: seed.orgID, inspectionID: seed.demoInspectionID, kind: .photo,
+                localPath: "p\(n).jpg", thumbPath: "t\(n).jpg", bytes: 1, width: 2048,
+                height: 1536, capturedAt: Clock.nowMillis() + Int64(n)))
+        }
+
+        XCTAssertEqual(try db.read(MediaRepository.tray(inspectionID: seed.demoInspectionID)).count, 5)
+
+        try media.file(mediaIDs: ids, toObservation: observationID)
+        XCTAssertEqual(try db.read(MediaRepository.tray(inspectionID: seed.demoInspectionID)).count, 0)
+        XCTAssertEqual(try db.read(MediaRepository.photos(observationID: observationID)).count, 5)
+
+        try media.unfile(mediaIDs: [ids[2]])
+        XCTAssertEqual(try db.read(MediaRepository.tray(inspectionID: seed.demoInspectionID)).count, 1)
+    }
+
+    /// A re-imported photo must not appear twice in the report. The later
+    /// capture is the accidental repeat, so the earlier row survives.
+    func testDigestDeduplicatesWithinAnInspection() throws {
+        let db = try AppDatabase.inMemory()
+        let seed = try FirstRun.bootstrapIfNeeded(db)
+        let media = MediaRepository(database: db)
+
+        let first = try media.record(
+            orgID: seed.orgID, inspectionID: seed.demoInspectionID, kind: .photo,
+            localPath: "a.jpg", thumbPath: nil, bytes: 1, width: 1, height: 1, capturedAt: 1_000)
+        let second = try media.record(
+            orgID: seed.orgID, inspectionID: seed.demoInspectionID, kind: .photo,
+            localPath: "b.jpg", thumbPath: nil, bytes: 1, width: 1, height: 1, capturedAt: 2_000)
+
+        try media.recordDigest(mediaID: first, sha256: "identical")
+        try media.recordDigest(mediaID: second, sha256: "identical")
+
+        let survivors = try db.read(MediaRepository.photos(inspectionID: seed.demoInspectionID))
+        XCTAssertEqual(survivors.map(\.id), [first], "the earlier capture is the one that survives")
+    }
+}

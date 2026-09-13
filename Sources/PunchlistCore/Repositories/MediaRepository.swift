@@ -84,10 +84,14 @@ public struct MediaRepository: Sendable {
         capturedAt: Int64,
         lat: Double? = nil,
         lon: Double? = nil,
-        durationMs: Int? = nil
+        durationMs: Int? = nil,
+        /// Supplied by the capture path, which mints the id at the shutter tap
+        /// so that the files on disk are already named after the row before the
+        /// row exists. Nothing has to reconcile the two afterwards.
+        mediaID: String? = nil
     ) throws -> String {
         try database.write { ctx in
-            try ctx.insert(.media, [
+            try ctx.insert(.media, id: mediaID, [
                 "org_id": orgID,
                 "inspection_id": inspectionID,
                 "kind": kind.rawValue,
