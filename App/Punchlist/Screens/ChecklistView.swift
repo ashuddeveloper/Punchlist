@@ -20,8 +20,17 @@ import SwiftUI
 // ============================================================================
 
 struct ChecklistView: View {
+    /// Named so section headers can report their position relative to the
+    /// scroll view rather than the screen.
+    static let scrollSpace = "checklist.scroll"
+
     @State private var model: ChecklistModel
     @State private var hasRestoredScrollPosition = false
+    @State private var isShootingPhotos = false
+    @State private var isShowingTray = false
+    @Environment(AppEnvironment.self) private var environment
+    /// Section id -> its header's offset from the top of the scroll view.
+    @State private var sectionOffsets: [String: CGFloat] = [:]
     @Environment(\.dismiss) private var dismiss
 
     init(database: AppDatabase, inspectionID: String) {
@@ -46,6 +55,23 @@ struct ChecklistView: View {
                 completion: model.completion(of:),
                 severity: model.severity(of:),
                 onJump: jump(to:))
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            CaptureBar(
+                trayCount: model.unfiledPhotoCount,
+                onShoot: { isShootingPhotos = true },
+                onTray: { isShowingTray = true })
+        }
+        .fullScreenCover(isPresented: $isShootingPhotos) {
+            CameraView(
+                database: environment.database,
+                store: environment.store,
+                inspectionID: model.inspectionID,
+                orgID: environment.orgID,
+                archiveOriginals: environment.archiveOriginals)
+        }
+        .sheet(isPresented: $isShowingTray) {
+            TraySheet(model: model, environment: environment)
         }
         .task { model.start() }
         .onDisappear { model.stop() }
@@ -93,6 +119,7 @@ struct ChecklistView: View {
                                 completion: model.completion(of: section),
                                 severity: model.severity(of: section))
                             .id(section.id)
+                            .background(SectionOffsetReporter(sectionID: section.id))
                         }
                     }
 
@@ -103,6 +130,10 @@ struct ChecklistView: View {
                 .scrollTargetLayout()
             }
             .scrollDismissesKeyboard(.interactively)
+            .coordinateSpace(name: ChecklistView.scrollSpace)
+            .onPreferenceChange(SectionOffsetKey.self) { offsets in
+                sectionOffsets = offsets
+            }
             .onAppear {
                 scrollProxy = proxy
                 restoreScrollPositionIfNeeded(proxy: proxy)
@@ -135,11 +166,16 @@ struct ChecklistView: View {
         }
     }
 
-    /// Which section the user is currently looking at. Tracked coarsely on
-    /// purpose — it only feeds the resume point and the jumper's highlight, and
-    /// neither is worth a per-row geometry reader.
+    /// Which section the user is currently looking at.
+    ///
+    /// Measured from the section headers only — eight of them, not sixty-six
+    /// rows — so this costs one geometry read per header rather than per item.
+    /// The topmost header at or above the fold is the section they are in.
     private func nearestSectionID(snapshot: TemplateSnapshot) -> String? {
-        snapshot.sections.first?.id
+        let settled = sectionOffsets
+            .filter { $0.value <= 1 }
+            .max { $0.value < $1.value }
+        return settled?.key ?? snapshot.sections.first?.id
     }
 }
 
@@ -274,5 +310,164 @@ private struct SectionHeader: View {
         .overlay(alignment: .bottom) { Hairline(color: .ink) }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
+    }
+}
+
+
+// MARK: - Section offset tracking
+
+private struct SectionOffsetKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] { [:] }
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+/// Reports one section header's position within the scroll view.
+///
+/// A `GeometryReader` in a `background` rather than wrapping the header: as a
+/// background it takes the size it is given and never influences layout, which
+/// a wrapping GeometryReader would.
+private struct SectionOffsetReporter: View {
+    let sectionID: String
+
+    var body: some View {
+        GeometryReader { geometry in
+            Color.clear.preference(
+                key: SectionOffsetKey.self,
+                value: [sectionID: geometry.frame(in: .named(ChecklistView.scrollSpace)).minY])
+        }
+    }
+}
+
+
+// MARK: - Capture bar
+
+/// Always reachable from the checklist, because the answer to "should I
+/// photograph this?" is yes, and any friction in front of that question
+/// produces reports with too few photos.
+private struct CaptureBar: View {
+    let trayCount: Int
+    let onShoot: () -> Void
+    let onTray: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Hairline()
+            HStack(spacing: Metrics.spaceM) {
+                Button(action: onShoot) {
+                    Label("Camera", systemImage: "camera.fill")
+                        .font(.bodyFieldMedium)
+                        .foregroundStyle(Color.paper)
+                        .frame(maxWidth: .infinity, minHeight: Metrics.tapTargetRepeated)
+                        .background(Color.ink)
+                        .clipShape(RoundedRectangle(cornerRadius: Metrics.radius))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open the camera")
+
+                Button(action: onTray) {
+                    HStack(spacing: Metrics.spaceS) {
+                        Image(systemName: "tray.full")
+                        Text("\(trayCount)").font(.figure)
+                    }
+                    .foregroundStyle(trayCount > 0 ? Color.ink : Color.slate)
+                    .padding(.horizontal, Metrics.spaceL)
+                    .frame(minHeight: Metrics.tapTargetRepeated)
+                    .background(Color.field)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Metrics.radius)
+                            .strokeBorder(Color.line, lineWidth: Metrics.rule))
+                    .clipShape(RoundedRectangle(cornerRadius: Metrics.radius))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(trayCount) photos waiting to be filed")
+            }
+            .padding(.horizontal, Metrics.gutter)
+            .padding(.vertical, Metrics.spaceM)
+            .background(Color.paper)
+        }
+    }
+}
+
+/// Filing from the tray onto an item. Bulk by default — inspectors shoot eight
+/// frames of one sill plate, and filing them one at a time would defeat the
+/// point of shooting freely in the first place.
+private struct TraySheet: View {
+    let model: ChecklistModel
+    let environment: AppEnvironment
+    @State private var pendingSelection: Set<String> = []
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            PhotoGridView(
+                database: environment.database,
+                store: environment.store,
+                inspectionID: model.inspectionID,
+                trayOnly: true,
+                onFile: { selection in pendingSelection = selection })
+            .navigationTitle("Photo tray")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .sheet(isPresented: .init(
+                get: { !pendingSelection.isEmpty },
+                set: { if !$0 { pendingSelection = [] } })
+            ) {
+                ItemPicker(model: model) { item, section in
+                    model.file(mediaIDs: Array(pendingSelection), toItem: item, section: section)
+                    pendingSelection = []
+                }
+            }
+        }
+    }
+}
+
+/// Which item do these photos belong to? A flat, searchable list of every
+/// visible item, grouped by section.
+private struct ItemPicker: View {
+    let model: ChecklistModel
+    let onPick: (SnapshotItem, SnapshotSection) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(model.snapshot?.sections ?? []) { section in
+                    Section(section.title) {
+                        ForEach(model.visibleItems(in: section)) { item in
+                            Button {
+                                onPick(item, section)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Text(item.label)
+                                        .font(.bodyField)
+                                        .foregroundStyle(Color.ink)
+                                    Spacer()
+                                    if model.photoCount(forItem: item.id) > 0 {
+                                        Text("\(model.photoCount(forItem: item.id))")
+                                            .font(.figureSmall)
+                                            .foregroundStyle(Color.slate)
+                                    }
+                                }
+                                .frame(minHeight: Metrics.tapTarget)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("File to which item?")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
     }
 }

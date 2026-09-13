@@ -71,6 +71,9 @@ final class ChecklistModel {
         observe(MediaRepository.photoCountsByObservation(inspectionID: inspectionID)) { [weak self] value in
             self?.photoCounts = value
         }
+        observe(MediaRepository.tray(inspectionID: inspectionID)) { [weak self] value in
+            self?.unfiledPhotoCount = value.count
+        }
     }
 
     func stop() {
@@ -134,6 +137,28 @@ final class ChecklistModel {
     func findings(forItem itemID: String) -> [Finding] {
         guard let observationID = answers[itemID]?.id else { return [] }
         return findingsByObservation[observationID] ?? []
+    }
+
+    /// Photos shot but not yet filed. Observed rather than counted locally,
+    /// for the same reason the camera's tray badge is: a local counter is wrong
+    /// the moment a photo is filed, deleted, or deduped by the digest worker.
+    private(set) var unfiledPhotoCount = 0
+
+    func file(mediaIDs: [String], toItem item: SnapshotItem, section: SnapshotSection) {
+        do {
+            let observationID: String
+            if let existing = answers[item.id]?.id {
+                observationID = existing
+            } else {
+                observationID = try checklist.setAnswer(
+                    inspectionID: inspectionID, sectionID: section.id, itemID: item.id,
+                    value: .cleared)
+            }
+            try MediaRepository(database: database)
+                .file(mediaIDs: mediaIDs, toObservation: observationID)
+        } catch {
+            loadFailure = "Those photos could not be filed. They are still in the tray."
+        }
     }
 
     func photoCount(forItem itemID: String) -> Int {

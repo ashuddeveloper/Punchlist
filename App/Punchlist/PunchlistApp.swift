@@ -69,13 +69,20 @@ final class AppEnvironment {
     let orgID: String
     let inspectorID: String
     let templateID: String
+    /// Read once at launch. Changing it mid-inspection would give one
+    /// inspection two different archive policies, which is worse than either.
+    let archiveOriginals: Bool
 
-    init(database: AppDatabase, store: MediaStore, orgID: String, inspectorID: String, templateID: String) {
+    init(
+        database: AppDatabase, store: MediaStore, orgID: String, inspectorID: String,
+        templateID: String, archiveOriginals: Bool = false
+    ) {
         self.database = database
         self.store = store
         self.orgID = orgID
         self.inspectorID = inspectorID
         self.templateID = templateID
+        self.archiveOriginals = archiveOriginals
     }
 
     static func databasePath() throws -> String {
